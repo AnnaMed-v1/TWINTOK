@@ -22,7 +22,8 @@
 #OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #SOFTWARE.
 
-import imas
+#!/usr/bin/env python3
+
 import sys
 import numpy as np
 from numba import jit #library for calculation in C
@@ -41,55 +42,69 @@ from scipy.signal import chirp, sweep_poly
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-%matplotlib inline
 
-path_GYSELA='GYSELA.h5'#path for GYSELA file
 path_fluid='Turbulence_map.h5'
 path_Working='' #path for the working directory
 sys.path.append(path_Working)
 
-T=0 
-f0=55E9 
-NX=500
-NY=600
-tmax = 1000
-tsweep=tmax #when a frequency sweep starts - put >tmax to ignore this function
-comment='test_code'
+
+###############################################################################
+# PHYSICS CONSTANTS
+###############################################################################
 c = 3.E8
 ep0 = 8.85418782E-12
 mu0 = 1.25663706E-6
 e = 1.602E-19
 me = 9.109E-31 
+
+###############################################################################
+# SIMULATION INPUT
+###############################################################################
+T=0                      #time point if an hdf5 file used
+ind_phi_stable=5000      #time when phase is stabilized
+f0=80E9                  #probing frequency
+n_max=6e19               #maximum density for a linear profile
+NX=800                   #grid size
+NY=800
+Xpml = 100               #PML size, to be smaller than NX, NY
+Ypml = 100
+tmax = 5500              #time step to stop the wave propagation
+tsweep=tmax #when a frequency sweep starts - put >tmax to ignore this function
 df0=0.25E9
 f_steps=1
+comment='test_code'
+
 w0 = 2*math.pi*f0
 dt = 1/(40.*f0) # 
 dx = 2*c*dt 
 dy = 2*c*dt
-B_ampl=2.5*1.65  
-plasma_size_x=NX*dx #in m, minimum 6 wave lengths -> 120 points after PML layer with 0 density to avoid parasitic reflections, 0.13 for previous simul.
+B_ampl=2.5*1.65           #Magnetic field amplitude 2.5 T at axes 1.65 m
+plasma_size_x=NX*dx 
+""" in m, minimum 6 wave lengths -> appr. 120 points after PML layer with 0 density
+to avoid parasitic reflections, 0.13 for previous simul. plus the size of actual plasma"""
 plasma_size_y=NY*dy
-x_start=2.12 #2.0 for GYSELA
-Xpml = 100 
-Ypml = 100
-v_f=25e15/1 #25e17/1 25GHz in 0.01us  slow sweep v_f=25e15/1  0.4GHz 45000 tps
-v_w=2*math.pi*v_f #25GHz in 0.01us
-sourcei = Xpml+5
-sourcej = int(NY/2.)
-waist = int(0.025/dx) 
-sourcewidth=2*waist
-n_max=2e19
-profile_type=1 #0 zero 1 linear 2 GYSELA 3 fluid turbulence
+x_start=2.12              #position of the plasma box left edge
+sourcei = Xpml+5          #Antenna position right in front of PML 
+sourcej = int(NY/2.)      #Antenna position by default at the center of the box
+waist = int(0.025/dx)     #waist of the beam
+sourcewidth=2*waist       #size of the antenna
+# sweep rates for a sweep test 
+v_f=25e15/1               #25e17/1 25GHz in 0.01us slow sweep v_f=25e15/1  0.4GHz 45000 tps
+v_w=2*math.pi*v_f         #25GHz in 0.01us
+dop =0.0                  #shift to launch wave with an agle
+profile_type=1            #0 zero 1 linear 2 GYSELA 3 fluid turbulence
+
+
 
 def init(t,p,sigma,ww,tstart):
-    dop=0
+    """" Defines the source of the reflectometer signal at the antenna's plane"""
     if t>tstart*dt:
         return math.exp(-p**2/sigma**2)*cmath.exp(1j*((w0+v_w*(t-dt*tstart))*t-dt*v_w*(t-dt)))*(math.tanh(t/dt/10. - 3) + 1)/2./math.sqrt(mu0/ep0)
     else:
-        return math.exp(-p**2/sigma**2)*cmath.exp(1j*(ww*t))*(math.tanh(t/dt/10. - 3) + 1)/2./math.sqrt(mu0/ep0)
-    
+       return math.exp(-p**2/sigma**2)*cmath.exp(1j*(ww*t-dop*p))*(math.tanh(t/dt/10. - 3) + 1)/2./math.sqrt(mu0/ep0)
 
 class loadHDF5():
+    """"Loads hdf5"""
     def __init__(self, filename):
         fh5       = h5.File(filename, 'r')
         var_in_h5 = list(fh5.keys())
@@ -102,6 +117,7 @@ class loadHDF5():
         fh5.close()                
 
 class grid:
+    """"Grid of the simulation which includes fields, currents and plasma frequencies"""
     def __init__(self, length, width, xpml, ypml):
         
         self.length = length
@@ -142,6 +158,7 @@ class grid:
         self.Hz_source = []
         
     def next_step(self, t, sourcei, sourcej, source_width,f):
+        """"One step of the simulation redefinig the source and calculating all the fields"""
         w = 2*math.pi*f
         self.res.append(self.Ey[sourcei,sourcej])
         width = self.width
@@ -153,9 +170,10 @@ class grid:
             self.Hz[sourcei, j] += init(t, j-sourcej,waist,w,tsweep)       
         self.Hz_source.append(self.Hz[sourcei, sourcej])
         self.Er,self.Ey,self.Hz,self.Hzx,self.Hzy,self.Jr,self.Jy=next_step_numba(width, length, xpml, ypml,dt, mu0,ep0,dx,dy,self.sxpml,self.ssxpml,self.sypml,self.ssypml,self.Er,self.Ey,self.Hz,self.Hzx,self.Hzy,self.Jr,self.Jy,self.wc,self.wp)      
+
 @jit("Tuple((complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:]))(int64,int64,int64,int64,float64,float64,float64,float64,float64,float64[:,:],float64[:,:],float64[:,:],float64[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],complex128[:,:],float64[:,:],float64[:,:])",nopython=True,cache=True)
 def next_step_numba(width, length, xpml, ypml,dt, mu0,ep0,dx,dy,sxpml,ssxpml,sypml,ssypml,Er,Ey,Hz,Hzx,Hzy,Jr,Jy,wc,wp):
-     
+    """"Fileds calculation accelerated with numba"""    
     Er_2=Er.copy()
     Ey_2=Ey.copy()
     Hz_2=Hz.copy()
@@ -243,8 +261,11 @@ def PML(simul, sigmam, n):
         for j in range(simul.width - simul.ypml -1, simul.width):
             simul.sypml[i,j] = sigmam*((j - simul.width + simul.ypml +1)/float(simul.ypml))**(n)
             simul.ssypml[i,j] = (mu0/(ep0))*simul.sypml[i,j]
-
+###############################################################################
+# Useful routines
+###############################################################################
 def wp(density):
+    """"Plasma frequency"""
     return np.array([[math.sqrt(max(0.00001, density[j,i]*e**2/(ep0*me))) for i in range(NY)]for j in range(NX)])
 
 def N2(w, wc, wp): 
@@ -263,7 +284,7 @@ def Nx(w,wc,wp):
     return Nx
 
 def COL(w,wc,wp):
-    """returns the position of the cut-off layer"""
+    """Returns the position of the cut-off layer"""
     
     cut=[0 for i in range(NY)]
     N = N2(w,wc,wp)
@@ -274,6 +295,7 @@ def COL(w,wc,wp):
                 break
     return cut
 def plot_phi_w(f0,phi_0):
+    """WKB phase calculation for f_steps of probing frequency"""
     ff=np.linspace(f0,f0+(f_steps-1)*df0,f_steps)
     w=np.array(2*math.pi*ff)
     ne_7=(density0)
@@ -320,15 +342,6 @@ def interp(col,i0, width):
     for i in range(int(x1),int(x2)+1):
         col[i] = A[0] + A[1]*(i) + A[2]*(i)**2 + A[3]*(i)**3
 
-def fluct_col(length, height, width):
-    col = [(i%length)*height/length for i in range(1200)]
-    for i in range(1,1200):
-        if i%length == 0 :
-            interp(col, i, width)
-    return col
-
-def mod_fluct(i,t,v):
-    return fluct[int((i+v*t)%NY)]
 
 def sin_fluct(a,i,L,t,T):
     return a*math.sin(i*2*math.pi/float(L) - 2*math.pi/float(T)*t)
@@ -339,6 +352,7 @@ def nec0(dens, w):
     return nec
 
 def trace_wx(density0, wc, NX):
+    """Get the cutoff frequency for all radial positions"""
     ne_7=np.flipud(density0[:,0])
     wc_7=np.flipud(wc[:,0])
     wp_7=np.sqrt(np.abs(ne_7*e**2/(ep0*me)))
@@ -348,118 +362,73 @@ def trace_wx(density0, wc, NX):
     wxx=np.array(wxx)
     return wxx
 
-def main():
-    B0 = np.array([[B_ampl/float(x_start+NX*dx-j*dx) for i in range(NY)] for j in range(NX)])
-    wc = np.array([[e*B0[j,i]/me for i in range(NY)]for j in range(NX)])
-    A=30
-    t=T
-    density0=np.zeros((NX,NY))
-    if profile_type==2:
-        gys_data = loadHDF5(path_GYSELA)
-        G_size_rho=512
-        G_size_theta=513
-        G_size_t=170
-        gys_rho=gys_data.rho
-        gys_theta=np.linspace(0, 2*math.pi,G_size_theta) 
-        gys_dn=gys_data.dn_on_n_tthr
-        gys_n=gys_data.dens
-        gys_n[437:467]=np.linspace(gys_n[437],gys_n[467],30)
-        for ll in range(400,512):
-            gys_n[ll]=gys_n[ll]*0.5*(1-math.tanh((ll-420)/1e1))
-        gys_x= np.array([[0.0000 for i in range(G_size_rho)] for j in range(G_size_theta)])
-        gys_y= np.array([[0.0000 for i in range(G_size_rho)] for j in range(G_size_theta)])
-        for ix in range(G_size_rho):
-            for iy in range(G_size_theta):
-                gys_x[iy][ix]=1.65+gys_rho[ix]*0.55*np.cos(gys_theta[iy])
-                gys_y[iy][ix]=gys_rho[ix]*0.55*np.sin(gys_theta[iy])
-        gys_dn1=np.swapaxes(gys_dn,0,2)
-        gys_dn1=np.swapaxes(gys_dn1,0,1)
-        gys_dens=np.resize(gys_n,(G_size_theta,G_size_rho))
-        gys_n_with_dn=np.array([[[0.0000 for i in range(G_size_theta)] for j in range(G_size_rho)] for k in range(G_size_theta)])
-        gys_dn1[gys_dn1>20]=20
-        for ix in range(G_size_t):
-            gys_n_with_dn[:,:,ix]=gys_dens*(1+gys_dn1[:,:,ix]/1e2)
-        gys_x1=np.reshape(gys_x, G_size_rho*G_size_theta)
-        gys_y1=np.reshape(gys_y, G_size_rho*G_size_theta)
-        gys_points= np.array([[0.0000 for i in range(2)] for j in range(G_size_rho*G_size_theta)])
-        gys_points[:,0]=gys_x1
-        gys_points[:,1]=gys_y1
+###############################################################################
+# Running the simulation
+###############################################################################
+    
+B0 = np.array([[B_ampl/float(x_start+NX*dx-j*dx) for i in range(NY)] for j in range(NX)]) # Magnetic field defined as 1/R
+wc = np.array([[e*B0[j,i]/me for i in range(NY)]for j in range(NX)])
 
-        gys_x_lin=np.linspace(x_start,x_start+plasma_size_x,NX)
-        gys_y_lin=np.linspace(-plasma_size_y,plasma_size_y,NY)
-        gys_xx_lin, gys_yy_lin = np.meshgrid(gys_x_lin, gys_y_lin)
-        gys_temp=gys_n_with_dn[0:513,0:512,t]
-        gys_dn_val=np.reshape(gys_temp,512*513)
-        gys_grid_z0 = griddata(gys_points, gys_dn_val, (gys_xx_lin, gys_yy_lin), method='linear')
-        density0 = gys_grid_z0.T*1e19
+t=T
+density0=np.zeros((NX,NY))
+
+if profile_type==1:
+    pos_0=NX-Xpml-240 #6 wavelengths of 0 density
+    for i in range(NY):
+        density0[0:pos_0,i]=np.linspace(n_max,0,pos_0)
+        for j in range(pos_0-10,pos_0+10):
+            density0[j-1,i]=n_max*(j-pos_0-10)**2/(pos_0)/40
         #smooth density
+    
+    x_fac=np.linspace(0,NX-1,NX)
+    y_fac=1+np.tanh((x_fac-10-Xpml)/(60)) #3 wavelengths of 0 smooth density -200, /60
+    ne=np.flipud(density0)
+    ne1=ne.T*y_fac
+    density0=ne1.T
+            
+if profile_type==3: 
+    ne_data = h5.File(path_fluid,'r')
+    density0=np.flipud(n_max*ne_data["ne_map"][t,:,:])
 
-        x_fac=np.linspace(0,NX-1,NX)
-        y_fac=1+np.tanh((x_fac-10-Xpml)/(60)) #3 wavelengths of 0 smooth density -200, /60
-        ne=np.flipud(density0)
-        ne1=ne.T*y_fac
-        ne1=ne1.T
-        ne=ne1
 
-        density0=ne
-    if profile_type==1:
-        pos_0=NX-2*Xpml#-408  
-        for i in range(NY):
-            density0[0:pos_0,i]=np.linspace(n_max,0,pos_0)
-            for j in range(pos_0-10,pos_0+10):
-                density0[j-1,i]=n_max*(j-pos_0-10)**2/(pos_0)/40
-            #smooth density
+phi_0=[]
+results = []
+Ey_ant=[]
+S_ant=[]
+simul0 = grid(NX,NY,Xpml,Ypml)
+simul0.clear()
+simul0.wc = wc
+simul0.density = density0
+simul0.wp = wp(simul0.density)
+PML(simul0, 10. , 4.)
+tt=0
+for k in range(tmax):
+    simul0.next_step(k*dt, sourcei, sourcej, sourcewidth,f0)
+    tt=tt+1
+    if tt==ind_phi_stable:
+        Ey_ant.append(simul0.Ey[Xpml+5,:])
+    if tt>ind_phi_stable:
+        Ey_ant.append(simul0.Ey[Xpml+5,:])
+sourceEy=simul0.res
+results.append(simul0.res)
+Ey_ant=np.array(Ey_ant)
+E_int=sum(abs(Ey_ant[0,:]))
+Ey_end=np.array(simul0.Ey[sourcei,:])
+for ll in range(NY):
+    S_ant.append((Ey_end[ll]*cmath.exp(-1j*w0*tmax*dt)-Ey_ant[0,ll]*cmath.exp(-1j*w0*ind_phi_stable*dt))*abs(Ey_ant[0,ll]))
+phi_0.append(cmath.phase(sum(S_ant)/E_int))
+amp_0=abs(sum(S_ant)/E_int)
+#plot simul0.Ey and density0 to check
+np.save(path_Working+'sourceEy_' + str(round(f0/1e7)) +comment+'.npy', results[t])
+np.save(path_Working+'Ey_ant_' + str(round(f0/1e7)) +comment+'.npy', Ey_ant)
+np.save(path_Working+'Ey_final_' + str(round(f0/1e7)) +comment+'.npy', simul0.Ey)
+np.save(path_Working+'amp_avg_' + str(round(f0/1e7))+comment+'.npy', amp_0)    
+np.save(path_Working+'phi_avg_' + str(round(f0/1e7))+comment+'.npy', phi_0)
 
-        x_fac=np.linspace(0,NX-1,NX)
-        y_fac=1+np.tanh((x_fac-10-Xpml)/(60)) #3 wavelengths of 0 smooth density -200, /60
-        ne=np.flipud(density0)
-        ne1=ne.T*y_fac
-        ne1=ne1.T
-        ne=ne1
-        density0=ne
-
-    if profile_type==3: 
-        ne_data = h5.File(path_fluid,'r')
-        density0=np.flipud(n_max*ne_data["ne_map"][t,:,:])
-
-    phi2=[]
-    phi1 = []
-    ind_phi_stable=500 
-    gys_x_lin=np.linspace(x_start,x_start+plasma_size_x,NX+1)
-    gys_y_lin=np.linspace(-plasma_size_y,plasma_size_y,NY)
-    gys_xx_lin, gys_yy_lin = np.meshgrid(gys_x_lin, gys_y_lin)
-
-    phi_0=[]
-    results = []
-    Ey_ant=[]
-    S_ant=[]
-    simul0 = grid(NX,NY,Xpml,Ypml)
-    simul0.clear()
-    simul0.wc = wc
-    simul0.density = density0
-    simul0.wp = wp(simul0.density)
-    PML(simul0, 10. , 4.)
-    tt=0
-    for k in range(tmax):
-        simul0.next_step(k*dt, sourcei, sourcej, sourcewidth,f0)
-        tt=tt+1
-        if tt==ind_phi_stable:
-            Ey_ant.append(simul0.Ey[Xpml+5,:])
-        if tt>7900:
-            Ey_ant.append(simul0.Ey[Xpml+5,:])
-    sourceEy=simul0.res
-    results.append(simul0.res)
-    Ey_ant=np.array(Ey_ant)
-    E_int=sum(abs(Ey_ant[0,:]))
-    Ey_end=np.array(simul0.Ey[sourcei,:])
-    for ll in range(NY):
-        S_ant.append((Ey_end[ll]*cmath.exp(-1j*w0*tmax*dt)-Ey_ant[0,ll]*cmath.exp(-1j*w0*ind_phi_stable*dt))*abs(Ey_ant[0,ll]))
-    phi_0.append(cmath.phase(sum(S_ant)/E_int))
-    amp_0=abs(sum(S_ant)/E_int)
-    plt.pcolor(np.real(simul0.Ey))
-    #plot simul0.Ey and density0
-    np.save(path_Working+'sourceEy_' + str(round(f0/1e7)) +comment+'.npy', results[t])
-    np.save(path_Working+'Ey_ant_' + str(round(f0/1e7)) +comment+'.npy', Ey_ant)
+plt.figure(1)
+plt.pcolor(np.real(simul0.Ey),cmap=cm.twilight_shifted)
+plt.figure(2)
+plt.pcolor(np.real(simul0.density),cmap=cm.twilight_shifted)
     np.save(path_Working+'Ey_final_' + str(round(f0/1e7)) +comment+'.npy', simul0.Ey)
     np.save(path_Working+'amp_avg_' + str(round(f0/1e7))+comment+'.npy', amp_0)    
     np.save(path_Working+'phi_avg_' + str(round(f0/1e7))+comment+'.npy', phi_0)
