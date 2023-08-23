@@ -409,6 +409,8 @@ for k in range(tmax):
         Ey_ant.append(simul0.Ey[Xpml+5,:])
     if tt>ind_phi_stable:
         Ey_ant.append(simul0.Ey[Xpml+5,:])
+if Ey_ant==[]: #in case of a simulation shorter than the time of phase stabilization
+    Ey_ant.append(simul0.Ey[Xpml+5,:])
 sourceEy=simul0.res
 results.append(simul0.res)
 Ey_ant=np.array(Ey_ant)
