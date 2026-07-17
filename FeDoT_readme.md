@@ -105,13 +105,67 @@ python3 FeDoT_reflectometry.py
 
 Output Files
 
-The code saves output arrays into the designated path_Working directory as standard NumPy binary matrices (.npy):
+The code saves output arrays into the designated path_Working directory as standard NumPy binary matrices (.npy)
 
-sourceEy_[Freq][Comment].npy: Time history tracking wave emission directly at the launch source.
+# X-Mode Profile Reconstruction Routine (`X_mode_profile_reconstruction.py`)
+*An Inversion Code for Microwave Reflectometry using the Bottollier-Curtet Algorithm*
 
-Ey_ant_[Freq][Comment].npy: Spatiotemporal matrix tracking wave activity crossing the antenna plane.
+---
 
-Ey_final_[Freq][Comment].npy: A final 2D snapshot of the spatial wave field configuration.
+## 1. Overview & Algorithmic Framework
+While FeDoT acts as the forward-modeling engine, this companion routine solves the inverse problem: **reconstructing the 1D electron density profile from the phase shift measured by X-mode microwave reflectometry.** 
+
+Because X-mode propagation depends non-linearly on both the plasma density and the spatially varying toroidal magnetic field ($B(R) \propto 1/R$), simple Abel inversion breaks down. This script implements the **Bottollier-Curtet (BC) integration algorithm**, which steps radially inward from the plasma edge, updating the local refractive index and correcting for the phase-delay singularity at the cutoff layer at each frequency channel.
+
+---
+
+## 2. Mathematical Workflow & Singularity Handling
+
+The routine evaluates the round-trip phase shift $\phi(\omega)$ accumulated from the vacuum boundary to the reflection layer $R_c$:
+
+$$\phi(\omega) = \frac{2\omega}{c} \int_{R_c}^{R_{\text{edge}}} N_X(r, \omega) \, dr - \frac{\pi}{2}$$
+
+The inversion loop handles the core physical challenges via three main steps:
+
+### A. Phase Extraction & Geometry Correction
+The raw phase is modified to isolate the true plasma contribution by subtracting the vacuum path length and the specific vessel coordinates.
+### B. The Bottollier-Curtet Iteration Step
+The internal phase accumulation up to the current layer ($S_n$) is calculated numerically using a trapezoidal rule optimization across all previously resolved plasma layers:
+
+$$S_n(f_{i+1}) = -\frac{4\pi f_{i+1}}{c} \sum_{j=1}^{i} ( \frac{N_X(r_j, f_{i+1}) + N_X(r_{j+1}, f_{i+1})}{2} \cdot (r_{j+1} - r_j)) + \frac{\pi}{2}$$
+
+### C. The 3/4 Singularity Factor
+Near the cutoff layer, the refractive index approaches zero ($N_X \to 0$), introducing a mathematical singularity. The code applies a localized analytic correction factor of $3/4$ to accurately project the next radial position step:
+
+$$r_{i+1} = r_i - \frac{3}{4} \left( \frac{c}{4\pi f_{i+1}} \right) \frac{2 \left(\phi_{i+1} - S_n[i] + \frac{\pi}{2}\right)}{N_X(r_i, f_{i+1})}$$
+
+---
+
+## 3. Core Functions Reference
+
+### `density_profile_bc(...)`
+The primary inversion function that accepts raw phase and frequency arrays alongside the magnetic field configuration to produce the localized spatial coordinates and electron densities.
+*   **Key Inputs:** Phase array (`phi_f_VW`), frequency sweep array in GHz (`F_VW`), first cutoff frequency (`F0`), magnetic profile vector (`B`), spatial grid (`R_B`).
+*   **Outputs:** Real-space major radius array (`rx`), electron density profile array (`nex`).
+*   **Feature:** Includes a `show_plots=True` debug switch that provides a real-time animated layout showing the profile building point-by-point alongside its phase gradient.
+
+### `calculate_theoretical_phase(...)`
+Generates synthetic data to validate the inversion algorithm. It solves the forward path problem by establishing an independent, fine-meshed root-finding search grid (`N_CUTOFF_SEARCH`) to pin down the exact cutoff coordinates before performing numerical quadrature integration (`scipy.integrate.quad`) of the X-mode refractive index.
+
+---
+
+## 4. Discretization Control & Settings
+
+The initialization variables are isolated at the top of the routine to guarantee numerical stability across complex plasma profile gradients:
+
+| Parameter | Default Value | Computational Target |
+| :--- | :--- | :--- |
+| `N_FREQ_POINTS` | `1000` | Grid channels for the probing sweep array; higher density mitigates integration step errors. |
+| `N_B_FIELD_POINTS` | `3000` | Matrix size for the background magnetic field mesh; eliminates discretization noise in spline interpolations. |
+| `N_CUTOFF_SEARCH` | `5000` | Precision scale for the internal forward-calculation root finder; guarantees exact interception of the cutoff boundary. |
+| `N_RECON_GRID` | `100` | Smooth spatial points mapped across tokamak edge bounds to initialize boundary steps. |
+
+Ey_final.npy: A final 2D snapshot of the spatial wave field configuration.
 
 amp_avg_ / amp_avg_ .npy: Scalar datasets tracking evaluated phase shifts and signal degradation markers due to turbulence interactions.
 
