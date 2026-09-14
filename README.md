@@ -1,5 +1,4 @@
 # TWINTOK
-# TWINTOK
 
 **TWINTOK** is an **IMAS-centred digital twin framework for synthetic diagnostics and validation of plasma simulations**.
 
