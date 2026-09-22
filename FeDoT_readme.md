@@ -1,7 +1,7 @@
 # FeDoT: Full-Wave Electromagnetic Code for Reflectometry
 *A 2D Finite-Difference Time-Domain (FDTD) Synthetic Diagnostic for Plasma Profile and Fluctuation Interpretations*
 
-**Author:** Anna MEDVEDEVA  
+**Author:** Anna GLASSER  
 **Copyright:** © 2023  
 **License:** MIT  
 
