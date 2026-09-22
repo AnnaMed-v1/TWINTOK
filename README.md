@@ -6,6 +6,11 @@
 
 TWINTOK connects plasma simulations to experimentally measurable quantities through synthetic diagnostics. Its goal is to provide a common, modular environment for **simulation-to-experiment comparison, model validation, uncertainty-aware analysis and multi-device deployment**.
 
+
+![TWINTOK plasma simulation](docs/images/twintok_plasma_demo.gif)
+
+[SOLEDGE-HDG simulation of WEST discharge validated with synthetic camera]
+
 The framework is developed in the context of the **EUROfusion Digital Twin Environment (DTE)** and the **TWINTOK-IDA** project.
 
 ---
